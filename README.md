@@ -1,4 +1,4 @@
-# QuanFaceAlignment: a bottom-up face alignment.
+# QuanFaceAlignment: A bottom-up face alignment method.
 
 By Wu Yuxiang and [Huang Bin](https://github.com/Isaver23)
 
