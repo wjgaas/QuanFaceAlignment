@@ -4,7 +4,7 @@ By Wu Yuxiang and [Huang Bin](https://github.com/Isaver23)
 
 ## License
 
-The code of InsightFace is released under the MIT License.
+The code of QuanFa is released under the MIT License.
 
 ## Recent Update
 
