@@ -41,6 +41,48 @@ class BoundaryHeatmapEstimator(nn.Module):
                           num_group=num_group)
         self.hourglass1 = HourglassBlock(hourglass_channels, norm_type=norm_type, act_type=act_type,
                                          num_group=num_group)
+        self.hourglass2 = HourglassBlock(hourglass_channels, norm_type=norm_type, act_type=act_type,
+                                         num_group=num_group)
+        self.hourglass3 = HourglassBlock(hourglass_channels, norm_type=norm_type, act_type=act_type,
+                                         num_group=num_group)
+        self.hourglass4 = HourglassBlock(hourglass_channels, norm_type=norm_type, act_type=act_type,
+                                         num_group=num_group)
+        self.heatmap = nn.Sequential(
+            *optUnit(opt_type='conv', in_ch=hourglass_channels, out_ch=boundaries, ker_size=1, stride=1))
+
+        for _layer in self.modules():
+            if isinstance(_layer, opt_layer):
+                nn.init.xavier_normal_(_layer.weight, 2 ** 0.5)
+            if isinstance(_layer, norm_layer):
+                nn.init.constant_(_layer.weight, 1.0)
+                nn.init.constant_(_layer.bias, 0.0)
+
+    def forward(self, data):
+        # no message passing version
+        pre = self.pre((data - 127.5) / 256)
+        hourglass_output1 = self.hourglass1(pre)
+        hourglass_output2 = self.hourglass2(hourglass_output1)
+        hourglass_output3 = self.hourglass3(hourglass_output2)
+        hourglass_output4 = self.hourglass4(hourglass_output3)
+        # compress = lambda x: (x - torch.min(x, dim=1, keepdim=True)[0]) / (
+        #         torch.max(x, dim=1, keepdim=True)[0] - torch.min(x, dim=1, keepdim=True)[0])
+        compress = lambda x: F.sigmoid(x)
+        inter1 = self.heatmap(hourglass_output1)
+        inter2 = self.heatmap(hourglass_output2)
+        inter3 = self.heatmap(hourglass_output3)
+        pred_heatmap = self.heatmap(hourglass_output4)
+        # return inter1, inter2, inter3, pred_heatmap
+        return compress(inter1), compress(inter2), compress(inter3), compress(pred_heatmap)
+
+
+class BoundaryHeatmapEstimatorwithMPL(nn.Module):
+    def __init__(self, input_channel, hourglass_channels, boundaries, norm_type='BN', act_type='prelu', num_group=None):
+        super().__init__()
+        # (in, out) = (1, 256)
+        self.pre = PreRes(input_channel, hourglass_channels, norm_type=norm_type, act_type=act_type,
+                          num_group=num_group)
+        self.hourglass1 = HourglassBlock(hourglass_channels, norm_type=norm_type, act_type=act_type,
+                                         num_group=num_group)
         self.mpl1 = MPIBlock(hourglass_channels, boundaries)
         self.hourglass2 = HourglassBlock(hourglass_channels, norm_type=norm_type, act_type=act_type,
                                          num_group=num_group)
@@ -65,17 +107,17 @@ class BoundaryHeatmapEstimator(nn.Module):
                 nn.init.constant_(_layer.bias, 0.0)
 
     def forward(self, data):
-        pre = self.pre(data)
+        pre = self.pre((data - 127.5) / 256)
         hourglass_output1 = self.hourglass1(pre)
         mpl1 = self.mpl1(hourglass_output1)
         hourglass_output2 = self.hourglass2(mpl1)
         mpl2 = self.mpl2(hourglass_output2)
-        hourglass_output3 = self.hourglass3(mpl2+mpl1)
+        hourglass_output3 = self.hourglass3(mpl2 + mpl1)
         mpl3 = self.mpl3(hourglass_output3)
-        hourglass_output4 = self.hourglass4(mpl3+mpl2)
+        hourglass_output4 = self.hourglass4(mpl3 + mpl2)
         mpl4 = self.mpl4(hourglass_output4)
         compress = lambda x: (x - torch.min(x, dim=1, keepdim=True)[0]) / (
-                    torch.max(x, dim=1, keepdim=True)[0] - torch.min(x, dim=1, keepdim=True)[0])
+                torch.max(x, dim=1, keepdim=True)[0] - torch.min(x, dim=1, keepdim=True)[0])
         inter1 = self.heatmap(mpl1)
         inter2 = self.heatmap(mpl2)
         inter3 = self.heatmap(mpl3)
@@ -176,8 +218,26 @@ class Discriminator(nn.Module):
         return output
 
 
+class DiscriL2(nn.Module):
+
+    def __init__(self, boundary):
+        super().__init__()
+        self.conv = nn.Conv2d(boundary, 1, 64, 1, 0, bias=False)
+
+        for _layer in self.modules():
+            if isinstance(_layer, nn.Conv2d):
+                nn.init.constant_(_layer.weight, 1.0)
+
+    def forward(self, real, pred):
+        loss = 0
+        for i in range(len(pred)):
+            loss += torch.mean(self.conv((real - pred[i]) ** 2))
+        # loss += torch.mean(self.conv((real - pred[3]) ** 2))
+        return loss / (64 * 64 * 13)
+
+
 if __name__ == "__main__":
     # net = Discriminator(13).cpu()
     # output = net(torch.ones((1, 1, 256, 256)), torch.ones((1, 13, 64, 64)))
-    net = LandmarksRegressor(256).cpu()
-    output = net(torch.ones((1, 1, 256, 256)), torch.ones((1, 13, 64, 64)))
+    net = DiscriL2(13).cpu()
+    output = net(torch.ones((1, 13, 64, 64)))

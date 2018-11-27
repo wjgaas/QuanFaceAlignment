@@ -5,6 +5,7 @@ import numpy as np
 
 def lrSchedule(base_lr, iter, iters, epoch=0, step = (30, 60, 90), target_lr=0.0, mode='cosine'):
     lr = target_lr if target_lr else base_lr
+    iters = iters if iter < iters else iter
     # every iteration
     if mode is 'cosine':
         lr += (base_lr - target_lr) * (1 + np.cos(np.pi * iter / iters)) / 2.0
@@ -93,7 +94,8 @@ def drawDistanceImg(img, points, color=(25, 100, 0)):
 
 def drawGaussianHeatmap(img, points, color=(25, 100, 0), sigma=4):
     dist_img = drawDistanceImg(img, points, color=color)
-    heatmap = (1.0 / np.sqrt(2 * np.pi * sigma)) * np.exp(-1.0 * dist_img ** 2 / (2.0 * sigma ** 2))
+    # heatmap = (1.0 / np.sqrt(2 * np.pi * sigma)) * np.exp(-1.0 * dist_img ** 2 / (2.0 * sigma ** 2))
+    heatmap = np.exp(-1.0 * dist_img ** 2 / (2.0 * sigma ** 2))
     heatmap = np.where(dist_img < (3.0 * sigma), heatmap, 0)
     for i in range(13):
         maxVal = heatmap[:, :, i].max()

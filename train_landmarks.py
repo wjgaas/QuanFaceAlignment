@@ -57,11 +57,11 @@ def save_checkpoint(path):
     }
     torch.save(state, path + f'/landmarks{time}.pt')
 
-    # state = {
-    #     'model': models[2].state_dict(),
-    #     'optimizer': optimizers[2].state_dict()
-    # }
-    # torch.save(state, path + f'/gan{time}.pt')
+    state = {
+        'model': models[2].state_dict(),
+        'optimizer': optimizers[2].state_dict()
+    }
+    torch.save(state, path + f'/gan{time}.pt')
 
 
 def adjustLr(iter, iters):
@@ -87,7 +87,8 @@ def main():
         for iter_idx, (data, heatmap, landmarks) in enumerate(pbar):
             # Setup
             global_iters = epoch * per_epoch + iter_idx
-            adjustLr(global_iters, final_iters)
+            if epoch > args.lr_epoch:
+                adjustLr(global_iters, final_iters)
             lam = np.random.beta(args.mixup_alpha, args.mixup_alpha)
 
             # Clean model grad, otherwise append
