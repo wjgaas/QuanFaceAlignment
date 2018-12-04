@@ -20,6 +20,10 @@ from torch.backends import cudnn
 from torch.utils.data.distributed import DistributedSampler
 from lab_utils import lrSchedule
 import numpy as np
+# Ignore warnings
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
 def heatmapLoss(pred, target, loss_type):
@@ -37,13 +41,13 @@ def heatmapLoss(pred, target, loss_type):
     return loss
 
 
-def save_checkpoint(path):
+def save_checkpoint(path, epoch):
     path, time = path.split(',')
     state = {
         'model': model.state_dict(),
         'optimizer': optimizer.state_dict()
     }
-    # torch.save(net, 'net.pkl')
+    # torch.save(net, path + 'net.pkl')
     torch.save(state, path + f'/boundaries{time}.pt')
 
     state = {
@@ -79,7 +83,8 @@ def main():
 
             # Clean model grad, otherwise append
             optimizer.zero_grad()
-            optim_dirsc.zero_grad()
+            if args.loss_type == 1:
+                optim_dirsc.zero_grad()
 
             # Put the data to GPUs
             data, heatmap = data.cuda(), heatmap.cuda()
@@ -94,33 +99,38 @@ def main():
             else:
                 mixup_data = data
                 mixup_heatmap = heatmap
-            pred_heatmap = model(mixup_data)
-            # loss_heatmap = heatmapLoss(pred_heatmaps, mixup_heatmap, args.loss_type)
-            loss_heatmap = model_dirsc(mixup_heatmap, pred_heatmap)
+            pred_heatmap = model(mixup_data, args.use_compress)
+            loss_heatmap = heatmapLoss(pred_heatmap, mixup_heatmap, args.loss_type)
+            # loss_heatmap = model_dirsc(mixup_heatmap, pred_heatmap)
             # Calc loss and Get the model grad (range from 0 to 1)
             loss_heatmap.backward()
 
             # Setup grad_scale
-            model.heatmap[0].weight.grad.data *= 0.25
-            torch.nn.utils.clip_grad_value_(model.parameters(), args.grad_clip)
+            # model.heatmap[0].weight.grad.data *= 0.25
+            # torch.nn.utils.clip_grad_value_(model.parameters(), args.grad_clip)
 
             # Update model
             optimizer.step()
-            optim_dirsc.step()
+            if args.loss_type == 1:
+                optim_dirsc.step()
 
             # The 8 cards average output
             loss_tb = hvd.allreduce(loss_heatmap, True, name='loss_heatmap')
 
             # Others
             if hvd.rank() is 0:
-                pbar.set_description(f'Epoch {epoch}  ')
+                pbar.set_description(f'Epoch {epoch}  Loss: {loss_tb} ')
                 writer.add_scalar('Net/loss_heatmap', loss_tb, global_iters)
-                writer.add_scalar('LR', optimizer.param_groups[0]['lr'], global_iters)
+                writer.add_scalar('LR/lr', optimizer.param_groups[0]['lr'], global_iters)
 
         if hvd.rank() is 0:
             pbar.close()
-            if epoch % 10 == 9 and epoch > args.lr_epoch - 200 and not torch.isnan(loss_heatmap):
-                save_checkpoint(args.save_params_path)
+            if epoch % 10 == 9 and epoch > args.lr_epoch - 100 and not torch.isnan(loss_heatmap):
+                path, time = args.save_params_path.split(',')
+                # save_checkpoint(args.save_params_path, epoch)
+                torch.save(model, path + f"model-{time}.pkl")
+                if args.loss_type == 1:
+                    torch.save(model_dirsc, path + f"model_dirsc-{time}.pkl")
                 print('Saved...')
 
     if hvd.rank() is 0:
@@ -157,13 +167,16 @@ if __name__ == '__main__':
     Estimator = BoundaryHeatmapEstimatorwithMPL if args.mpl else BoundaryHeatmapEstimator
     model = Estimator(args.img_channels, args.hourglass_channels, args.boundary, norm_type=args.norm_type,
                       num_group=args.num_group).cuda()
-    model_dirsc = DiscriL2(args.boundary).cuda()
+    if args.loss_type == 1:
+        model_dirsc = DiscriL2(args.boundary).cuda()
 
     # Optimizer
     optimizer = optim.SGD(model.parameters(), lr=args.lr_base[0], momentum=0.9, weight_decay=args.wd)
+    # optimizer = optim.Adam(model.parameters(), lr=args.lr_base[0], betas=args.beta, weight_decay=args.wd)
     optimizer = hvd.DistributedOptimizer(optimizer, named_parameters=model.named_parameters())
-    optim_dirsc = optim.SGD(model_dirsc.parameters(), lr=args.lr_target[2], momentum=0.9, weight_decay=args.wd)
-    optim_dirsc = hvd.DistributedOptimizer(optim_dirsc, model_dirsc.named_parameters())
+    if args.loss_type == 1:
+        optim_dirsc = optim.SGD(model_dirsc.parameters(), lr=args.lr_target[2], momentum=0.9, weight_decay=args.wd)
+        optim_dirsc = hvd.DistributedOptimizer(optim_dirsc, model_dirsc.named_parameters())
 
     # Load pretrained Model
     if args.pretrained and hvd.rank() is 0:
